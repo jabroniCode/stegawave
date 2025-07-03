@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simplified THEOplayer Playlist Query String</title>
+</head>
+<body>
+    <div id="theoplayer-instance"></div>
+    <script type="text/javascript" src="https://cdn.theoplayer.com/theoplayer.js"></script>
+    <link rel="stylesheet" type="text/css" href="https://cdn.theoplayer.com/ui.css">
+
+    <script type="text/javascript">
+        window.onload = function () {
+            const playerElement = document.getElementById('theoplayer-instance');
+            let player;
+
+            try {
+                player = new THEOplayer.Player(playerElement, {
+                    license: 'your_theoplayer_license',
+                    libraryLocation: 'https://cdn.theoplayer.com/'
+                });
+
+                player.network.addRequestInterceptor(function (request) {
+                    // Add the token to all requests
+                    const url = new URL(request.url);
+                    const token = 'yourSecureToken';
+                    url.searchParams.append('token', token);
+                    request.url = url.toString();
+                    console.log('Intercepted & Modified URL:', request.url);
+                });
+                console.log('THEOplayer initialized and request interceptor added.');
+
+                player.source = {
+                    sources: [{
+                        src: 'https://cdn.theoplayer.com/video/big_buck_bunny/big_buck_bunny.m3u8',
+                        type: 'application/x-mpegurl'
+                    }],
+                    poster: 'https://cdn.theoplayer.com/video/big_buck_bunny/poster.jpg'
+                };
+            } catch (error) {
+                console.error('Failed to initialize THEOplayer:', error);
+            }
+        };
+    </script>
+</body>
+</html>

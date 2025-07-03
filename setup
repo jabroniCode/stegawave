@@ -1,0 +1,16 @@
+#!/bin/bash
+# This script ensures the Rust toolchain is available and then runs the setup application.
+
+set -e
+
+# Check if cargo is installed
+if ! command -v cargo &> /dev/null
+then
+    echo "Rust and Cargo are not installed. Please install them to continue."
+    echo "You can find installation instructions at: https://www.rust-lang.org/tools/install"
+    exit 1
+fi
+
+# Run the setup binary, passing along all arguments to this script
+# This will compile and run the src/bin/setup.rs file
+cargo run --bin setup -- "$@"

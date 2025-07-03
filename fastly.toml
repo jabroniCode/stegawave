@@ -1,0 +1,41 @@
+# This file describes a Fastly Compute package. To learn more visit:
+# https://www.fastly.com/documentation/reference/compute/fastly-toml
+
+authors = ["sean@stegawave.com"]
+description = "stegawave dynamic audio watermarking on Fastly compute"
+language = "rust"
+manifest_version = 2
+name = "fastly-dynamic-watermarking"
+service_id = ""
+
+[local_server]
+
+  [local_server.backends]
+
+    [local_server.backends.origin_1]
+      url = "https://api.stegawave.com"
+
+[scripts]
+  build = "cargo build --bin fastly-dynamic-watermarking --release --target wasm32-wasip1 --color always"
+
+[setup]
+
+  [setup.backends]
+
+    [setup.backends.origin_1]
+      address = "stegawave-tmp.s3.eu-west-1.amazonaws.com"
+      description = "The primary origin server for HLS/DASH manifests and segments."
+      port = 443
+
+    [setup.backends.origin_2]
+      address = "api.stegawave.com"
+      description = "Stegawave endpoint for watermarking video segments."
+      port = 443
+
+  [setup.kv_stores]
+    [setup.kv_stores.secrets]
+      description = "Master secret for deriving JWT keys."
+    [setup.kv_stores.api_keys]
+      description = "API keys for internal service authentication."
+    [setup.kv_stores.watermarking_config]
+      description = "Configuration for the watermarking process."

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bitmovin Player Query String</title>
+</head>
+<body>
+    <div id="player"></div>
+    <script src="https://cdn.jsdelivr.net/npm/bitmovin-player@8/bitmovinplayer.js"></script>
+
+    <script>
+        window.onload = function () {
+            const playerElement = document.getElementById('player');
+            let playerInstance;
+
+            const BITMOVIN_LICENSE_KEY = 'YOUR_BITMOVIN_LICENSE_KEY'; // IMPORTANT: Replace with your actual Bitmovin license key
+            const JWT_TOKEN = 'yourSecureToken'; // Your token to be added as a query string
+
+            const playerConfig = {
+                key: BITMOVIN_LICENSE_KEY,
+                network: {
+                    preprocessHttpRequest: function(type, request) {
+                        const url = new URL(request.url);
+                        url.searchParams.append('token', JWT_TOKEN);
+                        request.url = url.toString();
+                        console.log('Intercepted & Modified URL:', request.url);
+                        return Promise.resolve(request);
+                    }
+                }
+            };
+
+            const sourceConfig = {
+                // Example HLS source - replace with your actual stream URL
+                hls: 'https://bitmovin-a.akamaihd.net/content/MI201109210084_1/m3u8s/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.m3u8'
+                // For DASH: dash: 'https://bitmovin-a.akamaihd.net/content/MI201109210084_1/mpds/f08e80da-bf1d-4e3d-8899-f0f6155f6efa.mpd'
+            };
+
+            try {
+                playerInstance = new bitmovin.player.Player(playerElement, playerConfig);
+                playerInstance.load(sourceConfig)
+                    .then(() => {
+                        console.log('Bitmovin Player loaded successfully.');
+                    })
+                    .catch((error) => {
+                        console.error('Bitmovin Player load failed:', error);
+                    });
+            } catch (error) {
+                console.error('Failed to initialize Bitmovin Player:', error);
+            }
+        };
+    </script>
+</body>
+</html>
