@@ -103,15 +103,10 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
     
     // Get the master secret key from the KV store
     let secrets_kv = KVStore::open(KV_STORE_SECRETS)?.expect("secrets KV store not found");
-    let secret_key_hex = match secrets_kv.lookup("SECRET_KEY_HEX") {
-        Ok(Some(entry)) => String::from_utf8_lossy(&entry.into_body_bytes()).to_string(),
-        Ok(None) => {
+    let secret_key_hex = match secrets_kv.lookup("SECRET_KEY_HEX")?.try_take_body() {
+        Some(body) => String::from_utf8_lossy(&body.into_bytes()).to_string(),
+        None => {
             println!("SECRET_KEY_HEX not found in KV store");
-            return Ok(Response::from_status(StatusCode::INTERNAL_SERVER_ERROR)
-                .with_body_text_plain("Server configuration error.\n"));
-        },
-        Err(e) => {
-            println!("Error accessing SECRET_KEY_HEX from KV store: {}", e);
             return Ok(Response::from_status(StatusCode::INTERNAL_SERVER_ERROR)
                 .with_body_text_plain("Server configuration error.\n"));
         }
@@ -218,7 +213,10 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         
         // Add API key for watermarking service authentication
         let api_keys = KVStore::open(DICTIONARY_API_KEYS)?.expect("api_keys KVStore not found");
-        let service_api_key = String::from_utf8_lossy(&api_keys.lookup("service_api_key")?.take_body_bytes()).to_string();
+        let service_api_key = match api_keys.lookup("service_api_key")?.try_take_body() {
+            Some(body) => String::from_utf8_lossy(&body.into_bytes()).to_string(),
+            None => String::new()
+        };
         
         // Debug: Print the exact API key for troubleshooting
         println!("WATERMARKING: API key (exact value): '{}'", service_api_key);
@@ -243,10 +241,19 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         
         // Add encoding configuration as headers to the watermarking request.
         let config = KVStore::open(DICTIONARY_CONFIG)?.expect("watermarking_config KVStore not found");
-        watermark_req.set_header("FMP4_AAC_PROFILE", String::from_utf8_lossy(&config.lookup("FMP4_AAC_PROFILE")?.take_body_bytes()).to_string());
-        watermark_req.set_header("FMP4_SAMPLE_RATE", String::from_utf8_lossy(&config.lookup("FMP4_SAMPLE_RATE")?.take_body_bytes()).to_string());
-        watermark_req.set_header("FMP4_CHANNELS", String::from_utf8_lossy(&config.lookup("FMP4_CHANNELS")?.take_body_bytes()).to_string());
-        watermark_req.set_header("FMP4_TRACK_ID", String::from_utf8_lossy(&config.lookup("FMP4_TRACK_ID")?.take_body_bytes()).to_string());
+
+        if let Some(body) = config.lookup("FMP4_AAC_PROFILE")?.try_take_body() {
+            watermark_req.set_header("FMP4_AAC_PROFILE", String::from_utf8_lossy(&body.into_bytes()).to_string());
+        }
+        if let Some(body) = config.lookup("FMP4_SAMPLE_RATE")?.try_take_body() {
+            watermark_req.set_header("FMP4_SAMPLE_RATE", String::from_utf8_lossy(&body.into_bytes()).to_string());
+        }
+        if let Some(body) = config.lookup("FMP4_CHANNELS")?.try_take_body() {
+            watermark_req.set_header("FMP4_CHANNELS", String::from_utf8_lossy(&body.into_bytes()).to_string());
+        }
+        if let Some(body) = config.lookup("FMP4_TRACK_ID")?.try_take_body() {
+            watermark_req.set_header("FMP4_TRACK_ID", String::from_utf8_lossy(&body.into_bytes()).to_string());
+        }
 
         // 3. Send the segment to the watermarking service.
         println!("WATERMARKING: Sending request to backend: {}", WATERMARKING_BACKEND);

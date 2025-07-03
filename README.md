@@ -17,13 +17,41 @@ The watermark is a 128-bit identifier derived from a `user_key` you provide, all
 
 This ensures that only a small, random subset of audio segments for each user contains a unique watermark, making it an efficient and secure way to protect your audio content.
 
+## Architecture
+
+The application consists of several components:
+
+### Core Components
+
+- **Fastly Compute@Edge Application**: The main Rust application that handles requests and routing
+- **KV Stores**: Three key-value stores for configuration and secrets:
+  - `secrets`: Stores the master secret key for JWT verification
+  - `api_keys`: Stores the StegaWave API key for service authentication
+  - `watermarking_config`: Stores audio encoding parameters (AAC profile, sample rate, channels, track ID)
+
+### Setup Tool
+
+The `setup-tool` is a comprehensive CLI application that manages:
+- Initial deployment and configuration
+- KV store management and updates
+- Service redeployment
+- Configuration file management
+
+### Configuration System
+
+- **CONFIG.txt**: Human-readable configuration file in the root directory
+- **Interactive Setup**: Prompts for all necessary configuration during installation
+- **Selective Updates**: Update specific configuration values without full redeployment
+- **Persistent Storage**: Configuration values are saved to KV stores and can be updated independently
+
 ## Installation and Setup
 
-This project includes an interactive setup script to configure and deploy the Fastly service.
+This project includes an interactive setup script with a comprehensive configuration system to configure and deploy the Fastly service.
 
 ### Prerequisites
 
 - You must have the [Fastly CLI](https://developer.fastly.com/learning/tools/cli/#installation) installed and authenticated.
+- Rust toolchain (the setup script will check for this)
 
 ### Setup Steps
 
@@ -31,16 +59,69 @@ This project includes an interactive setup script to configure and deploy the Fa
     ```bash
     ./setup install
     ```
-2.  **Provide Your Credentials:** The script will prompt you for the following information:
+
+2.  **Provide Your Credentials:** The script will prompt you for:
     *   **Fastly API Token**: Your Fastly API token with appropriate permissions to create services, backends, and KV stores.
     *   **StegaWave API Key**: Your API key for the StegaWave service.
 
+3.  **Configure Audio Encoding Parameters:** The script will prompt you to configure:
+    *   **AAC Profile**: Audio encoding profile (default: AAC-LC)
+    *   **Sample Rate**: Audio sample rate in Hz (default: 44100)
+    *   **Number of Channels**: Audio channels (default: 2 for stereo)
+    *   **Track ID**: Audio track identifier (default: 1)
+
 The script will then automatically:
-- Build and deploy the Rust application to Fastly Compute@Edge.
-- Create the necessary KV Stores (`secrets`, `api_keys`, `watermarking_config`).
-- Populate the KV stores with the required initial values.
+- Create and save your configuration to `CONFIG.txt`
+- Build and deploy the Rust application to Fastly Compute@Edge
+- Create the necessary KV Stores (`secrets`, `api_keys`, `watermarking_config`)
+- Populate the KV stores with your configuration values
 
 Upon completion, it will display the domain for your newly deployed Fastly service.
+
+## Configuration Management
+
+### CONFIG.txt File
+
+After installation, you can edit the `CONFIG.txt` file in the root directory to modify configuration values:
+
+```plaintext
+# Audio Encoding Configuration
+FMP4_AAC_PROFILE=AAC-LC
+FMP4_SAMPLE_RATE=44100
+FMP4_CHANNELS=2
+FMP4_TRACK_ID=1
+
+# Service Configuration
+STEGAWAVE_API_KEY=your_api_key_here
+FASTLY_API_TOKEN=your_token_here
+
+# Advanced Configuration
+WATERMARK_PROBABILITY=0.01
+```
+
+### Updating Configuration
+
+After modifying `CONFIG.txt`, you can update the deployed service:
+
+```bash
+# Update all configuration values
+./setup update
+
+# Update specific configuration keys
+./setup update --keys "FMP4_SAMPLE_RATE,FMP4_CHANNELS"
+```
+
+### Redeploying Code Changes
+
+If you modify the Rust code, redeploy with:
+
+```bash
+# Build and deploy
+./setup deploy
+
+# Deploy without rebuilding (if binary is already built)
+./setup deploy --skip-build
+```
 
 ## Usage
 
@@ -71,12 +152,37 @@ This repository includes two templates demonstrating how to do this with popular
 
 You will need to replace the placeholder stream URLs and license keys in these templates with your own.
 
-## Tailing Logs
+## Monitoring and Maintenance
 
-You can tail the logs for your deployed service to monitor requests and watermarking activity in real-time.
+### Tailing Logs
 
-Run the following command and provide your Fastly API token when prompted:
+You can tail the logs for your deployed service to monitor requests and watermarking activity in real-time:
 
 ```bash
 ./setup tail
+```
+
+### Available Commands
+
+The setup script supports several commands for managing your deployment:
+
+- **`./setup install`**: Initial setup and deployment
+- **`./setup update`**: Update KV store configuration values
+- **`./setup deploy`**: Redeploy the service after code changes
+- **`./setup tail`**: View real-time service logs
+
+### Command Options
+
+```bash
+# Install with pre-provided credentials
+./setup install --fastly-token "your_token" --stegawave-api-key "your_key"
+
+# Update specific configuration keys
+./setup update --keys "FMP4_SAMPLE_RATE,FMP4_CHANNELS"
+
+# Deploy without rebuilding
+./setup deploy --skip-build
+
+# Tail logs with pre-provided token
+./setup tail --fastly-token "your_token"
 ```

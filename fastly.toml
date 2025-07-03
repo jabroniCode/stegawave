@@ -5,7 +5,7 @@ authors = ["sean@stegawave.com"]
 description = "stegawave dynamic audio watermarking on Fastly compute"
 language = "rust"
 manifest_version = 2
-name = "fastly-dynamic-watermarking"
+name = "test"
 service_id = ""
 
 [local_server]
@@ -16,7 +16,7 @@ service_id = ""
       url = "https://api.stegawave.com"
 
 [scripts]
-  build = "cargo build --bin fastly-dynamic-watermarking --release --target wasm32-wasip1 --color always"
+  build = "cargo build --bin test --release --target wasm32-wasip1 --color always"
 
 [setup]
 

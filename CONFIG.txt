@@ -1,0 +1,33 @@
+# StegaWave Configuration
+# This file contains default values for KV store entries.
+# Edit these values as needed for your deployment.
+
+# === Audio Encoding Configuration ===
+# These values control how audio segments are processed for watermarking
+
+# AAC Profile to use for encoding (typically AAC-LC)
+FMP4_AAC_PROFILE=AAC-LC
+
+# Sample rate in Hz (44100 is standard CD quality)
+FMP4_SAMPLE_RATE=44100
+
+# Number of audio channels (2 for stereo)
+FMP4_CHANNELS=2
+
+# Track ID for the audio track in the FMP4 container
+FMP4_TRACK_ID=1
+
+# === Service Configuration ===
+# These values are automatically populated during setup but can be updated
+
+# Your StegaWave API key (will be set during setup)
+STEGAWAVE_API_KEY=
+
+# Fastly API token (will be set during setup)
+FASTLY_API_TOKEN=
+
+# === Advanced Configuration ===
+# These values typically don't need to be changed
+
+# Watermarking probability (0.01 = 1% chance)
+WATERMARK_PROBABILITY=0.01
