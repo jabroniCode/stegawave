@@ -11,37 +11,13 @@ then
     exit 1
 fi
 
-# Get the default target triple for the current system
-TARGET_TRIPLE=$(rustc -vV | grep "host:" | cut -d' ' -f2)
 
-# Check if the first argument is 'install'
-if [ "$1" == "install" ]; then
-    # Compile the setup-tool binary with the required feature
-    echo "Compiling setup-tool with feature 'setup_cli'..."
-    cargo build --release --features="setup_cli" --manifest-path setup-tool/Cargo.toml --target "$TARGET_TRIPLE"
-    echo "Setup-tool compiled successfully."
-    
-    # Run the compiled binary for installation
-    echo "Running setup-tool install..."
-    ./setup-tool/target/"$TARGET_TRIPLE"/release/setup-tool install "${@:2}"
-    exit 0
+# check if fastly cli is installed
+if ! command -v fastly &> /dev/null
+then
+    echo "Fastly CLI is not installed. Please install it to continue."
+    echo "You can find installation instructions at: https://developer.fastly.com/learning/tools/cli/"
+    exit 1
 fi
 
-# Check if the first argument is 'update', 'deploy', or 'tail'
-if [ "$1" == "update" ] || [ "$1" == "deploy" ] || [ "$1" == "tail" ]; then
-    # Compile the setup-tool binary with the required feature if it doesn't exist
-    if [ ! -f "./setup-tool/target/$TARGET_TRIPLE/release/setup-tool" ]; then
-        echo "Setup-tool not found. Compiling with feature 'setup_cli'..."
-        cargo build --release --features="setup_cli" --manifest-path setup-tool/Cargo.toml --target "$TARGET_TRIPLE"
-        echo "Setup-tool compiled successfully."
-    fi
-    
-    # Run the compiled binary with the specified command
-    echo "Running setup-tool $1..."
-    ./setup-tool/target/"$TARGET_TRIPLE"/release/setup-tool "$@"
-    exit 0
-fi
 
-# Run the setup binary, passing along all arguments to this script
-# This will compile and run the src/bin/setup.rs file
-cargo run --bin setup -- "$@"

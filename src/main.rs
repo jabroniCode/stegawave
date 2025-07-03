@@ -103,7 +103,7 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
     
     // Get the master secret key from the KV store
     let secrets_kv = KVStore::open(KV_STORE_SECRETS)?.expect("secrets KV store not found");
-    let secret_key_hex = match secrets_kv.lookup("SECRET_KEY_HEX")?.try_take_body() {
+    let secret_key_hex = match secrets_kv.lookup("SECRET_KEY_HEX")? {
         Some(body) => String::from_utf8_lossy(&body.into_bytes()).to_string(),
         None => {
             println!("SECRET_KEY_HEX not found in KV store");
@@ -111,7 +111,7 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
                 .with_body_text_plain("Server configuration error.\n"));
         }
     };
-    
+
     if secret_key_hex.trim().is_empty() {
         println!("SECRET_KEY_HEX is empty in KV store");
         return Ok(Response::from_status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -213,7 +213,7 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         
         // Add API key for watermarking service authentication
         let api_keys = KVStore::open(DICTIONARY_API_KEYS)?.expect("api_keys KVStore not found");
-        let service_api_key = match api_keys.lookup("service_api_key")?.try_take_body() {
+        let service_api_key = match api_keys.lookup("service_api_key")? {
             Some(body) => String::from_utf8_lossy(&body.into_bytes()).to_string(),
             None => String::new()
         };
@@ -242,16 +242,16 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         // Add encoding configuration as headers to the watermarking request.
         let config = KVStore::open(DICTIONARY_CONFIG)?.expect("watermarking_config KVStore not found");
 
-        if let Some(body) = config.lookup("FMP4_AAC_PROFILE")?.try_take_body() {
+        if let Some(body) = config.lookup("FMP4_AAC_PROFILE")? {
             watermark_req.set_header("FMP4_AAC_PROFILE", String::from_utf8_lossy(&body.into_bytes()).to_string());
         }
-        if let Some(body) = config.lookup("FMP4_SAMPLE_RATE")?.try_take_body() {
+        if let Some(body) = config.lookup("FMP4_SAMPLE_RATE")? {
             watermark_req.set_header("FMP4_SAMPLE_RATE", String::from_utf8_lossy(&body.into_bytes()).to_string());
         }
-        if let Some(body) = config.lookup("FMP4_CHANNELS")?.try_take_body() {
+        if let Some(body) = config.lookup("FMP4_CHANNELS")? {
             watermark_req.set_header("FMP4_CHANNELS", String::from_utf8_lossy(&body.into_bytes()).to_string());
         }
-        if let Some(body) = config.lookup("FMP4_TRACK_ID")?.try_take_body() {
+        if let Some(body) = config.lookup("FMP4_TRACK_ID")? {
             watermark_req.set_header("FMP4_TRACK_ID", String::from_utf8_lossy(&body.into_bytes()).to_string());
         }
 
