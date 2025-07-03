@@ -1,0 +1,33 @@
+#!/bin/bash
+
+# Check if user_key argument is provided
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <user_key>"
+    exit 1
+fi
+
+USER_KEY="$1"
+
+# Get API key from environment variable first
+API_KEY="$STEGAWAVE_API_KEY"
+
+# If not found in environment, try to get from file
+if [ -z "$API_KEY" ]; then
+    CONFIG_FILE="./stegawave.conf"
+    
+    # Check if config file exists
+    if [ -f "$CONFIG_FILE" ]; then
+        # Extract API key from file (assumes format: STEGAWAVE_API_KEY=value)
+        API_KEY=$(grep "^STEGAWAVE_API_KEY=" "$CONFIG_FILE" | cut -d'=' -f2)
+    fi
+fi
+
+# Check if we have an API key
+if [ -z "$API_KEY" ]; then
+    echo "Error: STEGAWAVE_API_KEY not found in environment variable or config file"
+    exit 1
+fi
+
+# Make the curl request
+curl -H "X-API-Key: $API_KEY" \
+     "https://api.stegawave.com/token?user_key=$USER_KEY"

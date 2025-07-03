@@ -29,7 +29,7 @@ const WATERMARK_PROBABILITY: f64 = 0.01; // 1% chance to watermark
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
     #[serde(rename = "user_key")]
-    session_id: String,
+    user_key: String,
     exp: usize,
 }
 
@@ -194,7 +194,7 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         let mut watermark_url = req.get_url().clone();
         // Add user_key query parameter
         let mut query_pairs: Vec<(String, String)> = watermark_url.query_pairs().into_owned().collect();
-        query_pairs.push(("user_key".to_string(), claims.session_id.clone()));
+        query_pairs.push(("user_key".to_string(), claims.user_key.clone()));
         let query_string = query_pairs.iter()
             .map(|(k, v)| format!("{}={}", urlencoding::encode(k), urlencoding::encode(v)))
             .collect::<Vec<_>>()
@@ -204,7 +204,7 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         println!("WATERMARKING: Sending segment to watermarking service for path: {}", path);
         println!("WATERMARKING: Request URL: {}", watermark_url);
         println!("WATERMARKING: Binary payload size: {} bytes", segment_body_bytes.len());
-        println!("WATERMARKING: User key: {}", claims.session_id);
+        println!("WATERMARKING: User key: {}", claims.user_key);
         
         // Send raw binary data instead of JSON with base64
         let mut watermark_req = Request::new(Method::POST, watermark_url)

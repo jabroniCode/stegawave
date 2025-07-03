@@ -20,4 +20,113 @@ then
     exit 1
 fi
 
+# check if jq is installed
+if ! command -v jq &> /dev/null
+then
+    echo "jq is not installed, but is required for this script. Please install it to continue."
+    echo "e.g., sudo apt-get install jq or sudo yum install jq"
+    exit 1
+fi
+
+# --- Configuration ---
+
+# Function to read a value from CONFIG.txt, trimming whitespace and comments
+get_config() {
+    grep "^${1}=" CONFIG.txt | sed 's/#.*//' | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+}
+
+# Load config, prompt for missing values
+if [ ! -f CONFIG.txt ]; then
+    echo "CONFIG.txt not found. Please create it."
+    exit 1
+fi
+
+NAME=$(get_config NAME)
+FASTLY_API_TOKEN=$(get_config FASTLY_API_TOKEN)
+STEGAWAVE_API_KEY=$(get_config STEGAWAVE_API_KEY)
+
+# Check for NAME
+if [ -z "$NAME" ]; then
+    read -p "Enter a name for your Fastly service: " NAME_INPUT
+    sed -i.bak "s/NAME=.*/NAME=$NAME_INPUT/" CONFIG.txt && rm CONFIG.txt.bak
+    NAME=$NAME_INPUT
+fi
+
+# Check for FASTLY_API_TOKEN
+if [ -z "$FASTLY_API_TOKEN" ]; then
+    read -s -p "Enter your Fastly API token: " FASTLY_API_TOKEN_INPUT
+    echo
+    sed -i.bak "s/FASTLY_API_TOKEN=.*/FASTLY_API_TOKEN=$FASTLY_API_TOKEN_INPUT/" CONFIG.txt && rm CONFIG.txt.bak
+    FASTLY_API_TOKEN=$FASTLY_API_TOKEN_INPUT
+fi
+export FASTLY_API_TOKEN
+
+# Check for STEGAWAVE_API_KEY
+if [ -z "$STEGAWAVE_API_KEY" ]; then
+    read -s -p "Enter your StegaWave API key: " STEGAWAVE_API_KEY_INPUT
+    echo
+    sed -i.bak "s/STEGAWAVE_API_KEY=.*/STEGAWAVE_API_KEY=$STEGAWAVE_API_KEY_INPUT/" CONFIG.txt && rm CONFIG.txt.bak
+    STEGAWAVE_API_KEY=$STEGAWAVE_API_KEY_INPUT
+fi
+
+echo "Configuration loaded."
+
+# --- Update Project Files ---
+
+echo "Updating project files with service name: $NAME"
+sed -i.bak "s/{NAME}/$NAME/g" Cargo.toml && rm Cargo.toml.bak
+sed -i.bak "s/{NAME}/$NAME/g" fastly.toml && rm fastly.toml.bak
+
+# --- Deploy to Fastly ---
+
+echo "Deploying to Fastly. This may take a few minutes..."
+fastly compute deploy --non-interactive
+
+# --- Populate KV Stores ---
+
+echo "Populating KV stores..."
+
+# The service ID should now be in fastly.toml after deployment
+SERVICE_ID=$(grep "^service_id" fastly.toml | cut -d'=' -f2 | tr -d ' "')
+
+if [ -z "$SERVICE_ID" ]; then
+    echo "Failed to get service ID from fastly.toml. Attempting to find it via service name."
+    SERVICE_ID=$(fastly service list --json | jq -r ".[] | select(.name == "$NAME") | .id")
+fi
+
+if [ -z "$SERVICE_ID" ]; then
+    echo "Failed to get service ID for service '$NAME'. Please check the Fastly UI."
+    exit 1
+fi
+echo "Service ID: $SERVICE_ID"
+
+# Get KV store IDs from the Fastly API
+SECRETS_STORE_ID=$(fastly kv-store list --service-id "$SERVICE_ID" --json | jq -r '.[] | select(.name == "secrets") | .id')
+API_KEYS_STORE_ID=$(fastly kv-store list --service-id "$SERVICE_ID" --json | jq -r '.[] | select(.name == "api_keys") | .id')
+WATERMARKING_CONFIG_STORE_ID=$(fastly kv-store list --service-id "$SERVICE_ID" --json | jq -r '.[] | select(.name == "watermarking_config") | .id')
+
+if [ -z "$SECRETS_STORE_ID" ]; then echo "Could not find 'secrets' KV store."; exit 1; fi
+if [ -z "$API_KEYS_STORE_ID" ]; then echo "Could not find 'api_keys' KV store."; exit 1; fi
+if [ -z "$WATERMARKING_CONFIG_STORE_ID" ]; then echo "Could not find 'watermarking_config' KV store."; exit 1; fi
+
+echo "KV Stores found."
+
+# Populate 'secrets' store
+echo "Populating 'secrets' store..."
+SECRET_KEY_HEX=$(openssl rand -hex 32)
+fastly kv-store-entry create --store-id "$SECRETS_STORE_ID" --key "SECRET_KEY_HEX" --value "$SECRET_KEY_HEX" --quiet
+
+# Populate 'api_keys' store
+echo "Populating 'api_keys' store..."
+fastly kv-store-entry create --store-id "$API_KEYS_STORE_ID" --key "service_api_key" --value "$STEGAWAVE_API_KEY" --quiet
+
+# Populate 'watermarking_config' store
+echo "Populating 'watermarking_config' store..."
+fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_AAC_PROFILE" --value "$(get_config FMP4_AAC_PROFILE)" --quiet
+fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_SAMPLE_RATE" --value "$(get_config FMP4_SAMPLE_RATE)" --quiet
+fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_CHANNELS" --value "$(get_config FMP4_CHANNELS)" --quiet
+fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_TRACK_ID" --value "$(get_config FMP4_TRACK_ID)" --quiet
+
+echo "Setup complete. Your service '$NAME' is deployed and configured."
+
 
