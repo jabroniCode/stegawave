@@ -1,176 +1,97 @@
 # StegaWave Dynamic Audio Watermarking for Fastly Compute@Edge
 
-This project is a Fastly Compute@Edge application that provides dynamic, session-based audio watermarking for fMP4 audio streams. It acts as a reverse proxy to your origin server, selectively watermarking a small percentage of audio segments before delivering them to the end-user.
+This Fastly Compute@Edge application provides a CDN layer in front of your origin server where playlist files are served for your content. It dynamically watermarks a small percentage of audio segments with unique identifiers, allowing you to trace content back to specific users or sessions.
 
-The watermark is a 128-bit identifier derived from a `user_key` you provide, allowing you to trace content back to a specific user or session.
+The watermarking process is transparent to your existing streaming infrastructure - the Fastly service acts as a reverse proxy, selectively watermarking about 1% of fMP4 audio segments before delivering them to end-users.
 
-## How it Works
+## Prerequisites
 
-1.  **Client-Side Token Generation**: Your application backend makes a request to the StegaWave API to get a short-lived JWT token. This token contains a unique `user_key`.
-2.  **Player Integration**: The client-side video player (e.g., THEOplayer, Bitmovin) is configured to append this JWT token as a query string parameter (`?token=...`) to every request it makes to the Fastly CDN.
-3.  **Fastly Compute App**: The Fastly application intercepts each request.
-    *   It validates the JWT token to authenticate the request.
-    *   For manifest files (`.m3u8`, `.mpd`), it proxies the request directly to the origin.
-    *   For fMP4 audio segments, it randomly selects about 1% of segments to be watermarked.
-    *   If a segment is chosen, it is sent to the StegaWave watermarking service along with the `user_key` from the JWT. The service embeds the watermark and returns the modified segment.
-    *   All other segments are passed through from the origin without modification.
+Before setting up this service, ensure you have:
 
-This ensures that only a small, random subset of audio segments for each user contains a unique watermark, making it an efficient and secure way to protect your audio content.
+- **Rust** toolchain installed
+- **Fastly CLI** installed and authenticated
+- **StegaWave API key** for watermarking service access
+- **Origin server** hosting your streaming content
 
-## Architecture
+## Setup Instructions
 
-The application consists of several components:
+### Step 1: Configure CONFIG.txt
 
-### Core Components
-
-- **Fastly Compute@Edge Application**: The main Rust application that handles requests and routing
-- **KV Stores**: Three key-value stores for configuration and secrets:
-  - `secrets`: Stores the master secret key for JWT verification
-  - `api_keys`: Stores the StegaWave API key for service authentication
-  - `watermarking_config`: Stores audio encoding parameters (AAC profile, sample rate, channels, track ID)
-
-### Setup Tool
-
-The `setup-tool` is a comprehensive CLI application that manages:
-- Initial deployment and configuration
-- KV store management and updates
-- Service redeployment
-- Configuration file management
-
-### Configuration System
-
-- **CONFIG.txt**: Human-readable configuration file in the root directory
-- **Interactive Setup**: Prompts for all necessary configuration during installation
-- **Selective Updates**: Update specific configuration values without full redeployment
-- **Persistent Storage**: Configuration values are saved to KV stores and can be updated independently
-
-## Installation and Setup
-
-This project includes an interactive setup script with a comprehensive configuration system to configure and deploy the Fastly service.
-
-### Prerequisites
-
-- You must have the [Fastly CLI](https://developer.fastly.com/learning/tools/cli/#installation) installed and authenticated.
-- Rust toolchain (the setup script will check for this)
-
-### Setup Steps
-
-1.  **Run the setup script:**
-    ```bash
-    ./setup install
-    ```
-
-2.  **Provide Your Credentials:** The script will prompt you for:
-    *   **Fastly API Token**: Your Fastly API token with appropriate permissions to create services, backends, and KV stores.
-    *   **StegaWave API Key**: Your API key for the StegaWave service.
-
-3.  **Configure Audio Encoding Parameters:** The script will prompt you to configure:
-    *   **AAC Profile**: Audio encoding profile (default: AAC-LC)
-    *   **Sample Rate**: Audio sample rate in Hz (default: 44100)
-    *   **Number of Channels**: Audio channels (default: 2 for stereo)
-    *   **Track ID**: Audio track identifier (default: 1)
-
-The script will then automatically:
-- Create and save your configuration to `CONFIG.txt`
-- Build and deploy the Rust application to Fastly Compute@Edge
-- Create the necessary KV Stores (`secrets`, `api_keys`, `watermarking_config`)
-- Populate the KV stores with your configuration values
-
-Upon completion, it will display the domain for your newly deployed Fastly service.
-
-## Configuration Management
-
-### CONFIG.txt File
-
-After installation, you can edit the `CONFIG.txt` file in the root directory to modify configuration values:
+First, fill out the `CONFIG.txt` file in the root directory with your specific configuration:
 
 ```plaintext
-# Audio Encoding Configuration
+# Fastly service name
+NAME=your-service-name
+
+# Origin server for HLS/DASH manifests and segments
+ORIGIN_1=your-origin-server.com
+
+# Your StegaWave API key
+STEGAWAVE_API_KEY=your_api_key_here
+
+# Fastly API token
+FASTLY_API_TOKEN=your_fastly_token_here
+
+# Audio encoding parameters (configure based on your content)
 FMP4_AAC_PROFILE=AAC-LC
 FMP4_SAMPLE_RATE=44100
 FMP4_CHANNELS=2
 FMP4_TRACK_ID=1
-
-# Service Configuration
-STEGAWAVE_API_KEY=your_api_key_here
-FASTLY_API_TOKEN=your_token_here
-
-# Advanced Configuration
-WATERMARK_PROBABILITY=0.01
 ```
 
-### Updating Configuration
+### Step 2: Deploy the Fastly Application
 
-After modifying `CONFIG.txt`, you can update the deployed service:
+Run the setup script to deploy the Fastly service:
 
 ```bash
-# Update all configuration values
-./setup update
-
-# Update specific configuration keys
-./setup update --keys "FMP4_SAMPLE_RATE,FMP4_CHANNELS"
+./setup
 ```
 
-### Redeploying Code Changes
+This will build and deploy the Rust application, create necessary KV stores, and configure the service with your settings.
 
-If you modify the Rust code, redeploy with:
+### Step 3: Generate JWT Tokens
 
-```bash
-# Build and deploy
-./setup deploy
+Every client must use a JWT token issued from the StegaWave API. Your server should fetch tokens for each user before streaming begins:
 
-# Deploy without rebuilding (if binary is already built)
-./setup deploy --skip-build
+**Request:**
+```
+GET https://api.stegawave.com/token?user_key=someuser123
+Headers:
+  X-API-Key: your_stegawave_api_key
 ```
 
-## Usage
-
-### 1. Get an Authentication Token
-
-To play content through the Fastly service, your application backend must first obtain a JWT token from the StegaWave API for each user.
-Make a GET request to:
-
-`https://api.stegawave.com/token?user_key=<user_key>`
-
-- `user_key`: A unique identifier for the user or session (e.g., a session ID). This is the value that will be embedded as the watermark.
-
-The API will return a JSON response containing the token:
-
+**Response:**
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzZXNzaW9uSUQiOiI1RUVEQzVDRTg5NDI2NUJDNTdERkM4NThCMTgzNzlBNiIsImV4cCI6MTc1MTU3NDQxNn0.f6PTxzk_DCMh3uevJ9OzXwvE_gpcm6sqYUeN97Dg8_k"
+  "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
 }
 ```
 
-### 2. Client-Side Player Configuration
+The `user_key` should be a unique identifier for your users, such as a user ID or email address.
 
-The retrieved token must be added as a query string parameter to all requests made by the video player to your Fastly service domain.
+### Step 4: Configure Client-Side Player
 
-This repository includes two templates demonstrating how to do this with popular players:
+Ensure your video player adds the JWT token as a query string parameter to all requests to the Fastly CDN.
 
--   `THEOplayer_template.html`: Shows how to use a `requestInterceptor` to add the `token` parameter to each request.
--   `Bitmovin_template.html`: Shows how to use the `preprocessHttpRequest` network configuration to achieve the same result.
+This repository includes templates for popular players:
 
-You will need to replace the placeholder stream URLs and license keys in these templates with your own.
+- **`THEOplayer_template.html`**: Uses `requestInterceptor` to add the token parameter
+- **`Bitmovin_template.html`**: Uses `preprocessHttpRequest` network configuration
 
-## Monitoring and Maintenance
+Replace the placeholder stream URLs and license keys in these templates with your own.
 
-### Tailing Logs
+## Setup Script Usage
 
-You can tail the logs for your deployed service to monitor requests and watermarking activity in real-time:
-
-```bash
-./setup tail
-```
+The setup script provides several commands for managing your deployment:
 
 ### Available Commands
 
-The setup script supports several commands for managing your deployment:
-
-- **`./setup install`**: Initial setup and deployment
+- **`./setup`**: Initial deployment (same as `./setup install`)
+- **`./setup install`**: Full setup and deployment
 - **`./setup update`**: Update KV store configuration values
 - **`./setup deploy`**: Redeploy the service after code changes
 - **`./setup tail`**: View real-time service logs
+- **`./setup restore`**: Restore project to template state
 
 ### Command Options
 
@@ -187,3 +108,10 @@ The setup script supports several commands for managing your deployment:
 # Tail logs with pre-provided token
 ./setup tail --fastly-token "your_token"
 ```
+
+The setup script will automatically handle:
+- Building the Rust application
+- Creating Fastly service and backends
+- Setting up KV stores for configuration
+- Populating configuration values
+- Deploying the service
