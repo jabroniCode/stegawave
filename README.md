@@ -127,7 +127,8 @@ If you modify the Rust code, redeploy with:
 
 ### 1. Get an Authentication Token
 
-To play content through the Fastly service, your application backend must first obtain a JWT token from the StegaWave API. Make a GET request to:
+To play content through the Fastly service, your application backend must first obtain a JWT token from the StegaWave API for each user.
+Make a GET request to:
 
 `https://api.stegawave.com/token?user_key=<user_key>`
 

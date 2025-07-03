@@ -1,6 +1,133 @@
 #!/bin/bash
 # This script ensures the Rust toolchain is available and then runs the setup application.
 
+# --- Restore Logic ---
+if [ "$1" == "restore" ]; then
+    echo "Restoring project to its original state..."
+
+    # Get the current service name from fastly.toml and Cargo.toml
+    CURRENT_NAME_FASTLY=$(grep "^name" fastly.toml | cut -d'=' -f2 | tr -d ' "')
+    CURRENT_NAME_CARGO=$(grep "^name" Cargo.toml | cut -d'=' -f2 | tr -d ' "')
+
+    # Check if both files are already in template state
+    if ([ -z "$CURRENT_NAME_FASTLY" ] || [ "$CURRENT_NAME_FASTLY" == "{NAME}" ]) && \
+       ([ -z "$CURRENT_NAME_CARGO" ] || [ "$CURRENT_NAME_CARGO" == "{NAME}" ]); then
+        echo "Project already seems to be in its original state."
+        exit 0
+    fi
+
+    # Use the name from whichever file has a real name (not a placeholder)
+    if [ ! -z "$CURRENT_NAME_FASTLY" ] && [ "$CURRENT_NAME_FASTLY" != "{NAME}" ]; then
+        CURRENT_NAME="$CURRENT_NAME_FASTLY"
+    elif [ ! -z "$CURRENT_NAME_CARGO" ] && [ "$CURRENT_NAME_CARGO" != "{NAME}" ]; then
+        CURRENT_NAME="$CURRENT_NAME_CARGO"
+    else
+        echo "Could not determine current service name."
+        exit 1
+    fi
+
+    echo "Reverting files for service: $CURRENT_NAME"
+
+    # Restore fastly.toml
+    sed -i.bak "s/name = \"$CURRENT_NAME\"/name = \"{NAME}\"/" fastly.toml
+    sed -i.bak "s/build = \"cargo build --bin $CURRENT_NAME --release --target wasm32-wasip1 --color always\"/build = \"cargo build --bin {NAME} --release --target wasm32-wasip1 --color always\"/" fastly.toml
+    sed -i.bak 's/service_id = ".*"/service_id = ""/' fastly.toml
+    sed -i.bak "s/address = \".*\"/address = \"{ORIGIN_1}\"/" fastly.toml
+    rm fastly.toml.bak
+
+    # Restore Cargo.toml
+    sed -i.bak "s/name = \"$CURRENT_NAME\"/name = \"{NAME}\"/" Cargo.toml
+    rm Cargo.toml.bak
+
+    # Restore CONFIG.txt
+    sed -i.bak 's/NAME=.*/NAME=/' CONFIG.txt
+    sed -i.bak 's/FASTLY_API_TOKEN=.*/FASTLY_API_TOKEN=/' CONFIG.txt
+    sed -i.bak 's/STEGAWAVE_API_KEY=.*/STEGAWAVE_API_KEY=/' CONFIG.txt
+    sed -i.bak 's/ORIGIN_1=.*/ORIGIN_1=/' CONFIG.txt
+    rm CONFIG.txt.bak
+
+    echo "Project files have been restored."
+
+    # Ask to delete the service
+    SERVICE_LIST_JSON=$(fastly service list --json 2>/dev/null)
+    if [ ! -z "$SERVICE_LIST_JSON" ] && [ "$SERVICE_LIST_JSON" != "null" ]; then
+        SERVICE_ID=$(echo "$SERVICE_LIST_JSON" | jq -r ".[] | select(.Name == \"$CURRENT_NAME\") | .ServiceID" 2>/dev/null)
+        if [ ! -z "$SERVICE_ID" ]; then
+            read -p "Do you want to delete the Fastly service '$CURRENT_NAME' (ID: $SERVICE_ID)? [y/N] " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                echo "Deleting Fastly service..."
+                fastly service delete --service-id "$SERVICE_ID" --force >/dev/null 2>&1
+                echo "Service deleted."
+            fi
+        fi
+    fi
+
+    # remove pkg and bin directories
+    if [ -d "pkg" ]; then
+        echo "Removing pkg directory..."
+        rm -rf pkg
+    fi
+    if [ -d "bin" ]; then
+        echo "Removing bin directory..."
+        rm -rf bin
+    fi
+
+    # remove Cargo.lock
+    if [ -f "Cargo.lock" ]; then
+        echo "Removing Cargo.lock..."
+        rm Cargo.lock
+    fi
+
+    # remove target directory
+    if [ -d "target" ]; then
+        echo "Removing target directory..."
+        rm -rf target
+    fi
+
+    echo "Restore complete."
+    exit 0
+fi
+
+# --- Tail Logic ---
+if [ "$1" == "tail" ]; then
+    echo "Starting log tail for service..."
+
+    # Function to read a value from CONFIG.txt, trimming whitespace and comments
+    get_config() {
+        grep "^${1}=" CONFIG.txt | sed 's/#.*//' | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
+    }
+
+    # Load config
+    if [ ! -f CONFIG.txt ]; then
+        echo "CONFIG.txt not found. Please run setup first."
+        exit 1
+    fi
+
+    NAME=$(get_config NAME)
+    if [ -z "$NAME" ]; then
+        echo "No service name found in CONFIG.txt. Please run setup first."
+        exit 1
+    fi
+
+    # Load Fastly API token
+    FASTLY_API_TOKEN=$(get_config FASTLY_API_TOKEN)
+    if [ -z "$FASTLY_API_TOKEN" ]; then
+        FASTLY_API_TOKEN=${FASTLY_API_TOKEN}
+    fi
+
+    if [ -z "$FASTLY_API_TOKEN" ]; then
+        echo "No Fastly API token found. Please run setup first or set FASTLY_API_TOKEN environment variable."
+        exit 1
+    fi
+
+    export FASTLY_API_TOKEN
+
+    echo "Tailing logs for service: $NAME"
+    fastly log-tail --service-name "$NAME"
+    exit 0
+fi
+
 set -e
 
 # Check if cargo is installed
@@ -28,6 +155,14 @@ then
     exit 1
 fi
 
+# check if curl is installed
+if ! command -v curl &> /dev/null
+then
+    echo "curl is not installed, but is required for this script. Please install it to continue."
+    echo "e.g., sudo apt-get install curl or sudo yum install curl"
+    exit 1
+fi
+
 # --- Configuration ---
 
 # Function to read a value from CONFIG.txt, trimming whitespace and comments
@@ -42,8 +177,22 @@ if [ ! -f CONFIG.txt ]; then
 fi
 
 NAME=$(get_config NAME)
+
+# Load from config file first, then check environment variables
 FASTLY_API_TOKEN=$(get_config FASTLY_API_TOKEN)
+if [ -z "$FASTLY_API_TOKEN" ]; then
+    FASTLY_API_TOKEN=${FASTLY_API_TOKEN}
+fi
+
 STEGAWAVE_API_KEY=$(get_config STEGAWAVE_API_KEY)
+if [ -z "$STEGAWAVE_API_KEY" ]; then
+    STEGAWAVE_API_KEY=${STEGAWAVE_API_KEY}
+fi
+
+ORIGIN_1=$(get_config ORIGIN_1)
+if [ -z "$ORIGIN_1" ]; then
+    ORIGIN_1=${ORIGIN_1}
+fi
 
 # Check for NAME
 if [ -z "$NAME" ]; then
@@ -69,64 +218,312 @@ if [ -z "$STEGAWAVE_API_KEY" ]; then
     STEGAWAVE_API_KEY=$STEGAWAVE_API_KEY_INPUT
 fi
 
+# Check for ORIGIN_1
+if [ -z "$ORIGIN_1" ]; then
+    read -p "Enter your origin server domain: " ORIGIN_1_INPUT
+    sed -i.bak "s/ORIGIN_1=.*/ORIGIN_1=$ORIGIN_1_INPUT/" CONFIG.txt && rm CONFIG.txt.bak
+    ORIGIN_1=$ORIGIN_1_INPUT
+fi
+
 echo "Configuration loaded."
 
 # --- Update Project Files ---
 
-echo "Updating project files with service name: $NAME"
+echo "Updating project files..."
 sed -i.bak "s/{NAME}/$NAME/g" Cargo.toml && rm Cargo.toml.bak
 sed -i.bak "s/{NAME}/$NAME/g" fastly.toml && rm fastly.toml.bak
+sed -i.bak "s/{ORIGIN_1}/$ORIGIN_1/g" fastly.toml && rm fastly.toml.bak
 
-# --- Deploy to Fastly ---
+# --- Build and Deploy to Fastly ---
 
-echo "Deploying to Fastly. This may take a few minutes..."
-fastly compute deploy --non-interactive
+echo "Building project..."
+fastly compute build >/dev/null 2>&1
+echo "✓ Build complete"
+
+# --- Create Fastly Service and Resources ---
+
+# Check if service already exists
+echo "Checking for existing service..."
+SERVICE_LIST_JSON=$(fastly service list --json 2>/dev/null)
+if [ -z "$SERVICE_LIST_JSON" ] || [ "$SERVICE_LIST_JSON" == "null" ]; then
+    SERVICE_ID=""
+else
+    SERVICE_ID=$(echo "$SERVICE_LIST_JSON" | jq -r 'if type == "array" then .[] | select(.Name == "'"$NAME"'") | .ServiceID else .data[]? | select(.Name == "'"$NAME"'") | .ServiceID end // empty' 2>/dev/null)
+fi
+
+if [ -z "$SERVICE_ID" ]; then
+    echo "Creating Fastly service..."
+    
+    # Temporarily disable exit on error for service creation
+    set +e
+    CREATE_SERVICE_OUTPUT=$(fastly service create --name "$NAME" --type wasm 2>&1)
+    CREATE_EXIT_CODE=$?
+    set -e
+    
+    if [ $CREATE_EXIT_CODE -eq 0 ]; then
+        SERVICE_ID=$(echo "$CREATE_SERVICE_OUTPUT" | awk '{print $4}')
+        echo "✓ Service created with ID: $SERVICE_ID"
+    elif echo "$CREATE_SERVICE_OUTPUT" | grep -q "already taken"; then
+        echo "Service '$NAME' already exists. Finding existing service ID..."
+        
+        # Try multiple times to find the service (API propagation delay)
+        for attempt in 1 2 3 4 5; do
+            SERVICE_LIST_JSON=$(fastly service list --json 2>/dev/null || echo "null")
+            
+            if [ ! -z "$SERVICE_LIST_JSON" ] && [ "$SERVICE_LIST_JSON" != "null" ]; then
+                SERVICE_ID=$(echo "$SERVICE_LIST_JSON" | jq -r 'if type == "array" then .[] | select(.Name == "'"$NAME"'") | .ServiceID else .data[]? | select(.Name == "'"$NAME"'") | .ServiceID end // empty' 2>/dev/null)
+                
+                if [ ! -z "$SERVICE_ID" ]; then
+                    echo "✓ Found existing service with ID: $SERVICE_ID"
+                    break
+                fi
+            fi
+            
+            if [ $attempt -lt 5 ]; then
+                sleep 2
+            fi
+        done
+        
+        if [ -z "$SERVICE_ID" ]; then
+            echo "ERROR: Could not find existing service ID after 5 attempts."
+            echo "Please wait a few minutes and try again, or check your Fastly dashboard."
+            exit 1
+        fi
+    else
+        echo "Failed to create Fastly service: $CREATE_SERVICE_OUTPUT"
+        exit 1
+    fi
+
+    # Add backends and KV stores
+    echo "Setting up service resources..."
+    set +e
+    fastly backend create --service-id "$SERVICE_ID" --version latest --name "origin_1" --address "$ORIGIN_1" --port 443 >/dev/null 2>&1
+    fastly backend create --service-id "$SERVICE_ID" --version latest --name "origin_2" --address "api.stegawave.com" --port 443 >/dev/null 2>&1
+    fastly kv-store create --name "secrets" >/dev/null 2>&1
+    fastly kv-store create --name "api_keys" >/dev/null 2>&1
+    fastly kv-store create --name "watermarking_config" >/dev/null 2>&1
+    set -e
+    echo "✓ Service resources configured"
+else
+    echo "✓ Using existing service with ID: $SERVICE_ID"
+    
+    # Ensure KV stores exist
+    set +e
+    fastly kv-store create --name "secrets" >/dev/null 2>&1
+    fastly kv-store create --name "api_keys" >/dev/null 2>&1
+    fastly kv-store create --name "watermarking_config" >/dev/null 2>&1
+    set -e
+fi
+
+# Update fastly.toml with the service ID to ensure deploy links correctly
+sed -i.bak "s/service_id = .*/service_id = \"$SERVICE_ID\"/" fastly.toml && rm fastly.toml.bak
+
+echo "Deploying to Fastly..."
+fastly compute deploy --service-id "$SERVICE_ID" --non-interactive >/dev/null 2>&1
+echo "✓ Deployment complete"
 
 # --- Populate KV Stores ---
 
-echo "Populating KV stores..."
+echo "Configuring KV stores..."
 
 # The service ID should now be in fastly.toml after deployment
 SERVICE_ID=$(grep "^service_id" fastly.toml | cut -d'=' -f2 | tr -d ' "')
 
 if [ -z "$SERVICE_ID" ]; then
-    echo "Failed to get service ID from fastly.toml. Attempting to find it via service name."
-    SERVICE_ID=$(fastly service list --json | jq -r ".[] | select(.name == "$NAME") | .id")
+    SERVICE_LIST_JSON=$(fastly service list --json 2>/dev/null)
+    if [ ! -z "$SERVICE_LIST_JSON" ] && [ "$SERVICE_LIST_JSON" != "null" ]; then
+        SERVICE_ID=$(echo "$SERVICE_LIST_JSON" | jq -r ".[] | select(.Name == \"$NAME\") | .ServiceID" 2>/dev/null)
+    fi
 fi
 
 if [ -z "$SERVICE_ID" ]; then
-    echo "Failed to get service ID for service '$NAME'. Please check the Fastly UI."
+    echo "ERROR: Failed to get service ID for service '$NAME'. Please check the Fastly UI."
     exit 1
 fi
-echo "Service ID: $SERVICE_ID"
 
 # Get KV store IDs from the Fastly API
-SECRETS_STORE_ID=$(fastly kv-store list --service-id "$SERVICE_ID" --json | jq -r '.[] | select(.name == "secrets") | .id')
-API_KEYS_STORE_ID=$(fastly kv-store list --service-id "$SERVICE_ID" --json | jq -r '.[] | select(.name == "api_keys") | .id')
-WATERMARKING_CONFIG_STORE_ID=$(fastly kv-store list --service-id "$SERVICE_ID" --json | jq -r '.[] | select(.name == "watermarking_config") | .id')
+KV_STORE_LIST_JSON=$(fastly kv-store list --json 2>/dev/null)
+if [ -z "$KV_STORE_LIST_JSON" ] || [ "$KV_STORE_LIST_JSON" == "null" ]; then
+    echo "ERROR: Failed to list KV stores. Please check your permissions."
+    exit 1
+fi
 
-if [ -z "$SECRETS_STORE_ID" ]; then echo "Could not find 'secrets' KV store."; exit 1; fi
-if [ -z "$API_KEYS_STORE_ID" ]; then echo "Could not find 'api_keys' KV store."; exit 1; fi
-if [ -z "$WATERMARKING_CONFIG_STORE_ID" ]; then echo "Could not find 'watermarking_config' KV store."; exit 1; fi
+# Function to extract KV store ID with fallback for different response formats
+get_kv_store_id() {
+    local store_name=$1
+    local response=$2
+    
+    # Try the standard format first (.Data[])
+    local store_id=$(echo "$response" | jq -r ".Data[]? | select(.Name == \"$store_name\") | .StoreID // empty" 2>/dev/null)
+    
+    # If that fails, try direct array format
+    if [ -z "$store_id" ]; then
+        store_id=$(echo "$response" | jq -r ".[] | select(.Name == \"$store_name\") | .StoreID // empty" 2>/dev/null)
+    fi
+    
+    # If still empty, try alternative field names
+    if [ -z "$store_id" ]; then
+        store_id=$(echo "$response" | jq -r ".Data[]? | select(.Name == \"$store_name\") | .ID // empty" 2>/dev/null)
+    fi
+    
+    echo "$store_id"
+}
 
-echo "KV Stores found."
+# Parse KV store IDs from the JSON response
+SECRETS_STORE_ID=$(get_kv_store_id "secrets" "$KV_STORE_LIST_JSON")
+API_KEYS_STORE_ID=$(get_kv_store_id "api_keys" "$KV_STORE_LIST_JSON")
+WATERMARKING_CONFIG_STORE_ID=$(get_kv_store_id "watermarking_config" "$KV_STORE_LIST_JSON")
+
+# Only exit if we can't find any KV stores
+if [ -z "$SECRETS_STORE_ID" ] && [ -z "$API_KEYS_STORE_ID" ] && [ -z "$WATERMARKING_CONFIG_STORE_ID" ]; then
+    echo "ERROR: Could not find any KV stores. They may not have been created properly."
+    exit 1
+fi
+
+# Link KV stores to the service
+SERVICE_VERSIONS=$(fastly service-version list --service-id "$SERVICE_ID" --json 2>/dev/null || echo "[]")
+CURRENT_VERSION=$(echo "$SERVICE_VERSIONS" | jq -r '.[] | select(.Active == true) | .Number // empty' 2>/dev/null)
+
+if [ -z "$CURRENT_VERSION" ]; then
+    CURRENT_VERSION=$(echo "$SERVICE_VERSIONS" | jq -r 'map(.Number) | max' 2>/dev/null)
+fi
+
+if [ -z "$CURRENT_VERSION" ]; then
+    CURRENT_VERSION="1"
+fi
+
+# Function to link a KV store with better error handling
+link_kv_store() {
+    local store_id=$1
+    local store_name=$2
+    
+    if [ -z "$store_id" ]; then
+        return 1
+    fi
+    
+    # First, check if it's already linked to the current version
+    EXISTING_LINKS=$(fastly resource-link list --service-id "$SERVICE_ID" --version "$CURRENT_VERSION" --json 2>/dev/null || echo "[]")
+    if echo "$EXISTING_LINKS" | jq -e ".[] | select(.Name == \"$store_name\")" >/dev/null 2>&1; then
+        return 0
+    fi
+    
+    # Try to create a new version for linking
+    set +e
+    NEW_VERSION_OUTPUT=$(fastly service-version clone --service-id "$SERVICE_ID" --version "$CURRENT_VERSION" 2>/dev/null)
+    CLONE_EXIT_CODE=$?
+    set -e
+    
+    if [ $CLONE_EXIT_CODE -eq 0 ]; then
+        # Try different patterns to extract version number
+        NEW_VERSION=$(echo "$NEW_VERSION_OUTPUT" | grep -o 'Version [0-9]\+' | grep -o '[0-9]\+' | head -1 || echo "")
+        if [ -z "$NEW_VERSION" ]; then
+            NEW_VERSION=$(echo "$NEW_VERSION_OUTPUT" | grep -o '[0-9]\+' | tail -1 || echo "")
+        fi
+        if [ -z "$NEW_VERSION" ]; then
+            NEW_VERSION=$(echo "$NEW_VERSION_OUTPUT" | grep -i "cloned" | grep -o '[0-9]\+' | head -1 || echo "")
+        fi
+        
+        if [ ! -z "$NEW_VERSION" ]; then
+            # Try to link to the new version
+            set +e
+            fastly resource-link create --service-id "$SERVICE_ID" --version "$NEW_VERSION" --resource-id "$store_id" --name "$store_name" >/dev/null 2>&1
+            LINK_EXIT_CODE=$?
+            set -e
+            
+            if [ $LINK_EXIT_CODE -eq 0 ]; then
+                # Activate the new version
+                set +e
+                fastly service-version activate --service-id "$SERVICE_ID" --version "$NEW_VERSION" >/dev/null 2>&1
+                ACTIVATE_EXIT_CODE=$?
+                set -e
+                
+                if [ $ACTIVATE_EXIT_CODE -eq 0 ]; then
+                    CURRENT_VERSION=$NEW_VERSION
+                    return 0
+                fi
+            fi
+        fi
+    fi
+    
+    # Fallback: try linking to the current version directly with autoclone
+    set +e
+    fastly resource-link create --service-id "$SERVICE_ID" --version "$CURRENT_VERSION" --resource-id "$store_id" --name "$store_name" --autoclone >/dev/null 2>&1
+    DIRECT_LINK_EXIT_CODE=$?
+    set -e
+    
+    if [ $DIRECT_LINK_EXIT_CODE -eq 0 ]; then
+        # The autoclone might have created a new version, so let's update our current version
+        NEW_SERVICE_VERSIONS=$(fastly service-version list --service-id "$SERVICE_ID" --json 2>/dev/null || echo "[]")
+        NEW_CURRENT_VERSION=$(echo "$NEW_SERVICE_VERSIONS" | jq -r '.[] | select(.Active == true) | .Number // empty' 2>/dev/null)
+        if [ ! -z "$NEW_CURRENT_VERSION" ] && [ "$NEW_CURRENT_VERSION" != "$CURRENT_VERSION" ]; then
+            CURRENT_VERSION=$NEW_CURRENT_VERSION
+        fi
+        
+        return 0
+    fi
+    
+    return 1
+}
+
+# Link each KV store
+echo "Linking KV stores..."
+KV_STORES_LINKED=0
+if link_kv_store "$SECRETS_STORE_ID" "secrets"; then
+    KV_STORES_LINKED=$((KV_STORES_LINKED + 1))
+fi
+if link_kv_store "$API_KEYS_STORE_ID" "api_keys"; then
+    KV_STORES_LINKED=$((KV_STORES_LINKED + 1))
+fi
+if link_kv_store "$WATERMARKING_CONFIG_STORE_ID" "watermarking_config"; then
+    KV_STORES_LINKED=$((KV_STORES_LINKED + 1))
+fi
+
+if [ $KV_STORES_LINKED -gt 0 ]; then
+    echo "✓ KV stores linked to service"
+else
+    echo "WARNING: No KV stores could be linked"
+fi
 
 # Populate 'secrets' store
-echo "Populating 'secrets' store..."
-SECRET_KEY_HEX=$(openssl rand -hex 32)
-fastly kv-store-entry create --store-id "$SECRETS_STORE_ID" --key "SECRET_KEY_HEX" --value "$SECRET_KEY_HEX" --quiet
+echo "Populating KV stores..."
+
+# Get secret from StegaWave API
+SECRET_RESPONSE=$(curl -s https://api.stegawave.com/getsecret -H "X-API-Key:$STEGAWAVE_API_KEY" 2>/dev/null || echo '{}')
+SECRET_KEY_HEX=$(echo "$SECRET_RESPONSE" | jq -r '.secret // empty' 2>/dev/null)
+
+if [ -z "$SECRET_KEY_HEX" ]; then
+    echo "WARNING: Failed to get secret from StegaWave API. Generating random secret as fallback..."
+    SECRET_KEY_HEX=$(openssl rand -hex 32)
+fi
+
+set +e
+fastly kv-store-entry create --store-id "$SECRETS_STORE_ID" --key "SECRET_KEY_HEX" --value "$SECRET_KEY_HEX" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    fastly kv-store-entry delete --store-id "$SECRETS_STORE_ID" --key "SECRET_KEY_HEX" >/dev/null 2>&1
+    fastly kv-store-entry create --store-id "$SECRETS_STORE_ID" --key "SECRET_KEY_HEX" --value "$SECRET_KEY_HEX" >/dev/null 2>&1
+fi
 
 # Populate 'api_keys' store
-echo "Populating 'api_keys' store..."
-fastly kv-store-entry create --store-id "$API_KEYS_STORE_ID" --key "service_api_key" --value "$STEGAWAVE_API_KEY" --quiet
+fastly kv-store-entry create --store-id "$API_KEYS_STORE_ID" --key "service_api_key" --value "$STEGAWAVE_API_KEY" >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+    fastly kv-store-entry delete --store-id "$API_KEYS_STORE_ID" --key "service_api_key" >/dev/null 2>&1
+    fastly kv-store-entry create --store-id "$API_KEYS_STORE_ID" --key "service_api_key" --value "$STEGAWAVE_API_KEY" >/dev/null 2>&1
+fi
 
 # Populate 'watermarking_config' store
-echo "Populating 'watermarking_config' store..."
-fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_AAC_PROFILE" --value "$(get_config FMP4_AAC_PROFILE)" --quiet
-fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_SAMPLE_RATE" --value "$(get_config FMP4_SAMPLE_RATE)" --quiet
-fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_CHANNELS" --value "$(get_config FMP4_CHANNELS)" --quiet
-fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "FMP4_TRACK_ID" --value "$(get_config FMP4_TRACK_ID)" --quiet
+for key_value in "FMP4_AAC_PROFILE:$(get_config FMP4_AAC_PROFILE)" "FMP4_SAMPLE_RATE:$(get_config FMP4_SAMPLE_RATE)" "FMP4_CHANNELS:$(get_config FMP4_CHANNELS)" "FMP4_TRACK_ID:$(get_config FMP4_TRACK_ID)"; do
+    key=$(echo "$key_value" | cut -d':' -f1)
+    value=$(echo "$key_value" | cut -d':' -f2-)
+    fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "$key" --value "$value" >/dev/null 2>&1
+    if [ $? -ne 0 ]; then
+        fastly kv-store-entry delete --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "$key" >/dev/null 2>&1
+        fastly kv-store-entry create --store-id "$WATERMARKING_CONFIG_STORE_ID" --key "$key" --value "$value" >/dev/null 2>&1
+    fi
+done
+set -e
 
-echo "Setup complete. Your service '$NAME' is deployed and configured."
+echo "✓ KV stores populated"
+
+echo "✓ Setup complete! Your service '$NAME' is deployed and configured."
 
 

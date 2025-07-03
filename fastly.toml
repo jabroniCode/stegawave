@@ -23,19 +23,22 @@ service_id = ""
   [setup.backends]
 
     [setup.backends.origin_1]
-      address = "stegawave-tmp.s3.eu-west-1.amazonaws.com"
+      address = "{ORIGIN_1}"
       description = "The primary origin server for HLS/DASH manifests and segments."
       port = 443
 
     [setup.backends.origin_2]
-      address = "api.stegawave.com"
+      address = "{ORIGIN_1}"
       description = "Stegawave endpoint for watermarking video segments."
       port = 443
 
   [setup.kv_stores]
-    [setup.kv_stores.secrets]
-      description = "Master secret for deriving JWT keys."
+
     [setup.kv_stores.api_keys]
       description = "API keys for internal service authentication."
+
+    [setup.kv_stores.secrets]
+      description = "Master secret for deriving JWT keys."
+
     [setup.kv_stores.watermarking_config]
       description = "Configuration for the watermarking process."

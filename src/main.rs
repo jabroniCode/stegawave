@@ -7,8 +7,10 @@ use fastly::{
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use rand::random;
 use serde::{Deserialize, Serialize};
+use serde_json;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
+use base64::{Engine as _, engine::general_purpose};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -72,15 +74,6 @@ fn derive_jwt_secret(api_key: &str, master_secret: &[u8]) -> Result<Vec<u8>, Err
 
 /// Handles the main logic of the application: authentication, routing, and watermarking.
 fn handle_request(mut req: Request) -> Result<Response, Error> {
-    // --- Extract API Key ---
-    let api_key = match req.get_header_str("X-API-Key") {
-        Some(key) => key.to_string(),
-        None => {
-            return Ok(Response::from_status(StatusCode::UNAUTHORIZED)
-                .with_body_text_plain("Missing API key.\n"));
-        }
-    };
-
     // --- JWT Verification ---
     // Token can be provided in 'Authorization: Bearer <token>' header or 'token' query param.
     let token_opt = req.get_header_str("Authorization")
@@ -127,9 +120,26 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
                 .with_body_text_plain("Server configuration error.\n"));
         }
     };
-    
-    // Derive the user-specific JWT secret
-    let jwt_secret_bytes = derive_jwt_secret(&api_key, &master_secret)?;
+
+    // Get the API key from the KV store - this should be the same API key used to sign the JWT
+    let api_keys = KVStore::open(DICTIONARY_API_KEYS)?.expect("api_keys KVStore not found");
+    let service_api_key = match api_keys.lookup("service_api_key")? {
+        Some(body) => String::from_utf8_lossy(&body.into_bytes()).to_string(),
+        None => {
+            println!("service_api_key not found in KV store");
+            return Ok(Response::from_status(StatusCode::INTERNAL_SERVER_ERROR)
+                .with_body_text_plain("Server configuration error.\n"));
+        }
+    };
+
+    if service_api_key.trim().is_empty() {
+        println!("service_api_key is empty in KV store");
+        return Ok(Response::from_status(StatusCode::INTERNAL_SERVER_ERROR)
+            .with_body_text_plain("Server configuration error.\n"));
+    }
+
+    // Derive the JWT secret using the API key (same as Python _derive_jwt_secret function)
+    let jwt_secret_bytes = derive_jwt_secret(&service_api_key, &master_secret)?;
     
     let decoding_key = DecodingKey::from_secret(&jwt_secret_bytes);
 
@@ -139,6 +149,30 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         },
         Err(e) => {
             println!("JWT verification failed: {}", e);
+            println!("Debug JWT verification:");
+            println!("  Token parts count: {}", token.split('.').count());
+            println!("  API key used for secret derivation: {}", &service_api_key[..std::cmp::min(service_api_key.len(), 10)]);
+            println!("  Master secret length: {} bytes", master_secret.len());
+            println!("  Derived JWT secret length: {} bytes", jwt_secret_bytes.len());
+            
+            // Try to provide more specific error information
+            match e.kind() {
+                jsonwebtoken::errors::ErrorKind::InvalidSignature => {
+                    println!("  Error: JWT signature verification failed");
+                    println!("  This usually means the JWT was signed with a different secret");
+                    println!("  Verify that the API key in the KV store matches the one used to sign the JWT");
+                },
+                jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
+                    println!("  Error: JWT has expired");
+                },
+                jsonwebtoken::errors::ErrorKind::InvalidToken => {
+                    println!("  Error: JWT format is invalid");
+                },
+                _ => {
+                    println!("  Error: Other JWT validation error: {:?}", e.kind());
+                }
+            }
+            
             return Ok(Response::from_status(StatusCode::UNAUTHORIZED)
                 .with_body_text_plain("Invalid JWT.\n"));
         }

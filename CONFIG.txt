@@ -20,6 +20,9 @@ FMP4_TRACK_ID=1
 
 # === Service Configuration ===
 
+# Origin server for HLS/DASH manifests and segments
+ORIGIN_1=
+
 # Your StegaWave API key 
 STEGAWAVE_API_KEY=
 
