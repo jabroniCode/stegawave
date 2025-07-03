@@ -22,6 +22,6 @@ if [ -z "$API_KEY" ]; then
     echo "STEGAWAVE_API_KEY not found"
 fi
 
-# Make the curl request
-curl -H "X-API-Key: $API_KEY" \
-     "https://api.stegawave.com/token?user_key=$USER_KEY"
+# Make the curl request  #######################################
+curl -H "X-API-Key: $API_KEY" "https://api.stegawave.com/token?user_key=$USER_KEY"
+################################################################
