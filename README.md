@@ -29,7 +29,7 @@ This project includes an interactive setup script to configure and deploy the Fa
 
 1.  **Run the setup script:**
     ```bash
-    cargo run --bin setup -- install
+    ./setup install
     ```
 2.  **Provide Your Credentials:** The script will prompt you for the following information:
     *   **Fastly API Token**: Your Fastly API token with appropriate permissions to create services, backends, and KV stores.
@@ -78,5 +78,5 @@ You can tail the logs for your deployed service to monitor requests and watermar
 Run the following command and provide your Fastly API token when prompted:
 
 ```bash
-cargo run --bin setup -- tail
+./setup tail
 ```
