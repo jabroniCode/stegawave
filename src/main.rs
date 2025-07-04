@@ -26,6 +26,7 @@ const DICTIONARY_API_KEYS: &str = "api_keys";
 const DICTIONARY_CONFIG: &str = "watermarking_config";
 
 const WATERMARK_PROBABILITY: f64 = 1.0; // 1% chance to watermark
+const MAX_AUDIO_SEGMENT_SIZE: usize = 500 * 1024; // 500 KB
 
 /// Defines the structure for JWT claims.
 #[derive(Debug, Serialize, Deserialize)]
@@ -196,17 +197,6 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
     let should_watermark = random::<f64>() > (1.0 - WATERMARK_PROBABILITY);
 
     if should_watermark {
-        // Skip video segments - they're too large for Lambda processing
-        if path.contains("/video/") {
-            println!("WATERMARKING: Skipping video segment (too large): {}", path);
-            let mut clean_req = Request::new(req.get_method().clone(), req.get_url().clone());
-            let body = req.take_body_bytes();
-            if !body.is_empty() {
-                clean_req = clean_req.with_body(body);
-            }
-            return Ok(clean_req.send(PRIMARY_BACKEND)?);
-        }
-
         // --- Watermarking Path ---
         println!("Watermarking segment: {}", path);
 
@@ -223,6 +213,16 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         }
         let segment_body = original_segment_resp.into_body();
         let segment_body_bytes = segment_body.into_bytes(); // Store original bytes for fallback
+
+        // Skip watermarking if the segment is too large (likely video).
+        if segment_body_bytes.len() > MAX_AUDIO_SEGMENT_SIZE {
+            println!(
+                "WATERMARKING: Skipping segment (too large: {} bytes): {}",
+                segment_body_bytes.len(),
+                path
+            );
+            return Ok(Response::from_status(StatusCode::OK).with_body(segment_body_bytes));
+        }
 
         // 2. Prepare a new request to the watermarking service.
         let mut watermark_url = req.get_url().clone();
@@ -252,10 +252,6 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
             None => String::new()
         };
         
-        // Debug: Print the exact API key for troubleshooting
-        println!("WATERMARKING: API key (exact value): '{}'", service_api_key);
-        println!("WATERMARKING: API key length: {} characters", service_api_key.len());
-        
         // Check for any potential whitespace or special characters
         if service_api_key.contains(char::is_whitespace) {
             println!("WATERMARKING: WARNING - API key contains whitespace!");
@@ -263,14 +259,13 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
         
         if !service_api_key.is_empty() {
             println!("WATERMARKING: Adding API key to request: {}", &service_api_key[..std::cmp::min(service_api_key.len(), 30)]);
-            // Trim any whitespace just in case
             watermark_req.set_header("X-API-Key", service_api_key.trim());
             
             // Add explicit Host header to ensure correct routing
             watermark_req.set_header("Host", "api.stegawave.com");
             println!("WATERMARKING: Added explicit Host header: api.stegawave.com");
         } else {
-            println!("WATERMARKING: No API key found in dictionary");
+            println!("WATERMARKING: No API key found");
         }
         
         // Add encoding configuration as headers to the watermarking request.
@@ -340,22 +335,15 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
             // Provide specific guidance based on status code
             match status.as_u16() {
                 403 => {
-                    println!("WATERMARKING: 403 Forbidden - Check API Gateway configuration:");
-                    println!("  - Verify API key is correct and active");
-                    println!("  - Check API Gateway resource permissions");
-                    println!("  - Verify binary media types are configured (application/octet-stream)");
-                    println!("  - Check if request is hitting the correct endpoint");
-                    println!("  - Verify EC2 instance is running and accessible");
+                    println!("WATERMARKING: 403 Forbidden ");
+                    println!("Verify API key is correct and active");
                 },
                 413 => {
                     println!("WATERMARKING: 413 Payload Too Large - Request body too large for API Gateway");
-                    println!("  - Consider reducing segment size or using direct upload");
+                    println!("  - Consider reducing segment size");
                 },
                 502 | 503 | 504 => {
                     println!("WATERMARKING: {} - Backend service issue:", status);
-                    println!("  - Check EC2 instance health");
-                    println!("  - Verify service is running on correct port");
-                    println!("  - Check API Gateway target group health");
                 },
                 _ => {
                     println!("WATERMARKING: Unexpected error status: {}", status);
