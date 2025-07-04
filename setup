@@ -110,12 +110,6 @@ if [ "$1" == "tail" ]; then
         exit 1
     fi
 
-    # Load Fastly API token
-    FASTLY_API_TOKEN=$(get_config FASTLY_API_TOKEN)
-    if [ -z "$FASTLY_API_TOKEN" ]; then
-        FASTLY_API_TOKEN=${FASTLY_API_TOKEN}
-    fi
-
     if [ -z "$FASTLY_API_TOKEN" ]; then
         echo "No Fastly API token found. Please run setup first or set FASTLY_API_TOKEN environment variable."
         exit 1
@@ -170,6 +164,34 @@ get_config() {
     grep "^${1}=" CONFIG.txt | sed 's/#.*//' | cut -d'=' -f2- | sed 's/^[[:space:]]*//;s/[[:space:]]*$//'
 }
 
+# Function to get the current origin backend address from an existing service
+get_existing_origin() {
+    local service_id=$1
+    if [ -z "$service_id" ]; then
+        echo ""
+        return
+    fi
+    
+    # Get the latest version of the service
+    local version_json=$(fastly service-version list --service-id "$service_id" --json 2>/dev/null || echo "[]")
+    local latest_version=$(echo "$version_json" | jq -r '.[] | select(.Active == true) | .Number // empty' 2>/dev/null)
+    
+    if [ -z "$latest_version" ]; then
+        latest_version=$(echo "$version_json" | jq -r 'map(.Number) | max' 2>/dev/null)
+    fi
+    
+    if [ -z "$latest_version" ]; then
+        echo ""
+        return
+    fi
+    
+    # Get backends for the latest version
+    local backends_json=$(fastly backend list --service-id "$service_id" --version "$latest_version" --json 2>/dev/null || echo "[]")
+    local origin_address=$(echo "$backends_json" | jq -r '.[] | select(.Name == "origin_1") | .Address // empty' 2>/dev/null)
+    
+    echo "$origin_address"
+}
+
 # Load config, prompt for missing values
 if [ ! -f CONFIG.txt ]; then
     echo "CONFIG.txt not found. Please create it."
@@ -178,15 +200,17 @@ fi
 
 NAME=$(get_config NAME)
 
-# Load from config file first, then check environment variables
-FASTLY_API_TOKEN=$(get_config FASTLY_API_TOKEN)
-if [ -z "$FASTLY_API_TOKEN" ]; then
-    FASTLY_API_TOKEN=${FASTLY_API_TOKEN}
+
+CONFIG_TOKEN=$(get_config FASTLY_API_TOKEN)
+if [ ! -z "$CONFIG_TOKEN" ]; then
+    export FASTLY_API_TOKEN="$CONFIG_TOKEN"
+    echo $FASTLY_API_TOKEN
+    exit 1
 fi
 
-STEGAWAVE_API_KEY=$(get_config STEGAWAVE_API_KEY)
-if [ -z "$STEGAWAVE_API_KEY" ]; then
-    STEGAWAVE_API_KEY=${STEGAWAVE_API_KEY}
+CONFIG_STEGAWAVE_KEY=$(get_config STEGAWAVE_API_KEY)
+if [ ! -z "$CONFIG_STEGAWAVE_KEY" ]; then
+  export STEGAWAVE_API_KEY="$CONFIG_STEGAWAVE_KEY"
 fi
 
 ORIGIN_1=$(get_config ORIGIN_1)
@@ -219,8 +243,31 @@ if [ -z "$STEGAWAVE_API_KEY" ]; then
 fi
 
 # Check for ORIGIN_1
+EXISTING_ORIGIN=""
+if [ ! -z "$NAME" ] && [ "$NAME" != "{NAME}" ]; then
+    # Check if service already exists to get current origin
+    echo "Checking for existing service configuration..."
+    TEMP_SERVICE_LIST_JSON=$(fastly service list --json 2>/dev/null)
+    if [ ! -z "$TEMP_SERVICE_LIST_JSON" ] && [ "$TEMP_SERVICE_LIST_JSON" != "null" ]; then
+        TEMP_SERVICE_ID=$(echo "$TEMP_SERVICE_LIST_JSON" | jq -r 'if type == "array" then .[] | select(.Name == "'"$NAME"'") | .ServiceID else .data[]? | select(.Name == "'"$NAME"'") | .ServiceID end // empty' 2>/dev/null)
+        if [ ! -z "$TEMP_SERVICE_ID" ]; then
+            EXISTING_ORIGIN=$(get_existing_origin "$TEMP_SERVICE_ID")
+            if [ ! -z "$EXISTING_ORIGIN" ]; then
+                echo "Found existing service '$NAME' with origin: $EXISTING_ORIGIN"
+            fi
+        fi
+    fi
+fi
+
 if [ -z "$ORIGIN_1" ]; then
-    read -p "Enter your origin server domain: " ORIGIN_1_INPUT
+    if [ ! -z "$EXISTING_ORIGIN" ]; then
+        read -p "Enter your origin server domain [$EXISTING_ORIGIN]: " ORIGIN_1_INPUT
+        if [ -z "$ORIGIN_1_INPUT" ]; then
+            ORIGIN_1_INPUT="$EXISTING_ORIGIN"
+        fi
+    else
+        read -p "Enter your origin server domain: " ORIGIN_1_INPUT
+    fi
     sed -i.bak "s/ORIGIN_1=.*/ORIGIN_1=$ORIGIN_1_INPUT/" CONFIG.txt && rm CONFIG.txt.bak
     ORIGIN_1=$ORIGIN_1_INPUT
 fi
@@ -306,6 +353,61 @@ if [ -z "$SERVICE_ID" ]; then
     echo "✓ Service resources configured"
 else
     echo "✓ Using existing service with ID: $SERVICE_ID"
+    
+    # Check if we need to update the origin backend
+    CURRENT_ORIGIN=$(get_existing_origin "$SERVICE_ID")
+    if [ ! -z "$CURRENT_ORIGIN" ] && [ "$CURRENT_ORIGIN" != "$ORIGIN_1" ]; then
+        echo "Updating origin backend from '$CURRENT_ORIGIN' to '$ORIGIN_1'..."
+        
+        # Get the latest version
+        VERSION_JSON=$(fastly service-version list --service-id "$SERVICE_ID" --json 2>/dev/null || echo "[]")
+        LATEST_VERSION=$(echo "$VERSION_JSON" | jq -r '.[] | select(.Active == true) | .Number // empty' 2>/dev/null)
+        
+        if [ -z "$LATEST_VERSION" ]; then
+            LATEST_VERSION=$(echo "$VERSION_JSON" | jq -r 'map(.Number) | max' 2>/dev/null)
+        fi
+        
+        if [ ! -z "$LATEST_VERSION" ]; then
+            # Clone the version to make changes
+            set +e
+            NEW_VERSION_OUTPUT=$(fastly service-version clone --service-id "$SERVICE_ID" --version "$LATEST_VERSION" 2>/dev/null)
+            CLONE_EXIT_CODE=$?
+            set -e
+            
+            if [ $CLONE_EXIT_CODE -eq 0 ]; then
+                NEW_VERSION=$(echo "$NEW_VERSION_OUTPUT" | grep -o 'Version [0-9]\+' | grep -o '[0-9]\+' | head -1 || echo "")
+                if [ -z "$NEW_VERSION" ]; then
+                    NEW_VERSION=$(echo "$NEW_VERSION_OUTPUT" | grep -o '[0-9]\+' | tail -1 || echo "")
+                fi
+                
+                if [ ! -z "$NEW_VERSION" ]; then
+                    # Update the backend address
+                    set +e
+                    fastly backend update --service-id "$SERVICE_ID" --version "$NEW_VERSION" --name "origin_1" --address "$ORIGIN_1" >/dev/null 2>&1
+                    UPDATE_EXIT_CODE=$?
+                    set -e
+                    
+                    if [ $UPDATE_EXIT_CODE -eq 0 ]; then
+                        # Activate the new version
+                        set +e
+                        fastly service-version activate --service-id "$SERVICE_ID" --version "$NEW_VERSION" >/dev/null 2>&1
+                        ACTIVATE_EXIT_CODE=$?
+                        set -e
+                        
+                        if [ $ACTIVATE_EXIT_CODE -eq 0 ]; then
+                            echo "✓ Origin backend updated successfully"
+                        else
+                            echo "WARNING: Failed to activate updated service version"
+                        fi
+                    else
+                        echo "WARNING: Failed to update origin backend"
+                    fi
+                fi
+            else
+                echo "WARNING: Failed to clone service version for backend update"
+            fi
+        fi
+    fi
     
     # Ensure KV stores exist
     set +e
@@ -492,8 +594,8 @@ SECRET_RESPONSE=$(curl -s https://api.stegawave.com/getsecret -H "X-API-Key:$STE
 SECRET_KEY_HEX=$(echo "$SECRET_RESPONSE" | jq -r '.secret // empty' 2>/dev/null)
 
 if [ -z "$SECRET_KEY_HEX" ]; then
-    echo "WARNING: Failed to get secret from StegaWave API. Generating random secret as fallback..."
-    SECRET_KEY_HEX=$(openssl rand -hex 32)
+    echo "WARNING: Failed to get secret from StegaWave API."
+    exit 1
 fi
 
 set +e

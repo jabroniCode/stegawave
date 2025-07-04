@@ -2,7 +2,11 @@
 
 This Fastly Compute@Edge application provides a CDN layer in front of your origin server where playlist files are served for your content. It dynamically watermarks a small percentage of audio segments with unique identifiers, allowing you to trace content back to specific users or sessions.
 
-The watermarking process is transparent to your existing streaming infrastructure - the Fastly service acts as a reverse proxy, selectively watermarking about 1% of fMP4 audio segments before delivering them to end-users.
+The watermarking process is transparent to your existing streaming infrastructure - the Fastly service acts as a reverse proxy, selectively watermarking 1% of fMP4 audio segments before delivering them to end-users. 
+
+## Disclaimer
+
+The watermarking will **NOT** work if the content is DRM-encrypted. However, it is possible to modify `src/main.rs` to decrypt the audio segment using the encryption key (retrieved from the DRM key server) before sending it to the watermarking endpoint. After watermarking, the audio segment can be re-encrypted at the Fastly Compute service before being sent back to the client.
 
 ## Prerequisites
 

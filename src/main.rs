@@ -25,7 +25,7 @@ const KV_STORE_SECRETS: &str = "secrets";  // KV store for secrets
 const DICTIONARY_API_KEYS: &str = "api_keys";
 const DICTIONARY_CONFIG: &str = "watermarking_config";
 
-const WATERMARK_PROBABILITY: f64 = 0.01; // 1% chance to watermark
+const WATERMARK_PROBABILITY: f64 = 1.0; // 1% chance to watermark
 
 /// Defines the structure for JWT claims.
 #[derive(Debug, Serialize, Deserialize)]
