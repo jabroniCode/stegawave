@@ -25,7 +25,7 @@ const KV_STORE_SECRETS: &str = "secrets";  // KV store for secrets
 const DICTIONARY_API_KEYS: &str = "api_keys";
 const DICTIONARY_CONFIG: &str = "watermarking_config";
 
-const WATERMARK_PROBABILITY: f64 = 1.0; // 1% chance to watermark
+const WATERMARK_PROBABILITY: f64 = 0.01; // 1% chance to watermark
 const MAX_AUDIO_SEGMENT_SIZE: usize = 500 * 1024; // 500 KB
 
 /// Defines the structure for JWT claims.
@@ -304,28 +304,26 @@ fn handle_request(mut req: Request) -> Result<Response, Error> {
             println!("  Response header {}: {:?}", name, value);
         }
         
-        // Check if watermarking was successful and response has content
-        if watermarked_resp.get_status().is_success() {
-            let response_body = watermarked_resp.clone_with_body().into_body_bytes();
-            if response_body.is_empty() {
-                println!("WATERMARKING: Service returned empty response, falling back to original content");
-                // Return original unwatermarked content
-                Ok(Response::from_status(StatusCode::OK)
-                    .with_header("Content-Type", "video/mp4")
-                    .with_body(segment_body_bytes))
-            } else {
-                println!("WATERMARKING: Service returned watermarked content ({} bytes)", response_body.len());
-                // Return the watermarked response with original headers
-                let mut response = Response::from_status(watermarked_resp.get_status())
-                    .with_body(response_body);
-                
-                // Copy headers from the watermarked response
-                for (name, value) in watermarked_resp.get_headers() {
-                    response.set_header(name, value);
-                }
-                
-                Ok(response)
+        // Check if response has content first, regardless of status code
+        let response_body = watermarked_resp.clone_with_body().into_body_bytes();
+        if response_body.is_empty() {
+            println!("WATERMARKING: Service returned empty response (status: {}), falling back to original content", watermarked_resp.get_status());
+            // Return original unwatermarked content
+            Ok(Response::from_status(StatusCode::OK)
+                .with_header("Content-Type", "video/mp4")
+                .with_body(segment_body_bytes))
+        } else if watermarked_resp.get_status().is_success() {
+            println!("WATERMARKING: Service returned watermarked content ({} bytes)", response_body.len());
+            // Return the watermarked response with original headers
+            let mut response = Response::from_status(watermarked_resp.get_status())
+                .with_body(response_body);
+            
+            // Copy headers from the watermarked response
+            for (name, value) in watermarked_resp.get_headers() {
+                response.set_header(name, value);
             }
+            
+            Ok(response)
         } else {
             let response_body = watermarked_resp.clone_with_body().into_body_str();
             let status = watermarked_resp.get_status();
