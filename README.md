@@ -26,8 +26,9 @@ Before setting up this service, ensure you have:
 
 - **Origin server** hosting your streaming content (fMP4/CMAF format)
 - **Frontend/application server** for serving your client application and issuing JWT tokens
-- **Rust** toolchain installed (required for Fastly Compute@Edge)
+- **Rust** toolchain installed (required for Fastly Compute)
 - **Fastly CLI** installed and authenticated
+    ```npm i fastly-cli ```
 - **Fastly API token** for service deployment
 - **StegaWave API key** for watermarking service access
 
